@@ -87,11 +87,27 @@ def load_and_process_data():
     rules_df = pd.DataFrame(rules_list)
     unique_pairs_count = len(pair_counts)
 
-    return total_days, len(all_items), unique_pairs_count, rules_df, sorted(list(all_items))
+    return (
+        total_days,
+        len(all_items),
+        unique_pairs_count,
+        rules_df,
+        sorted(list(all_items)),
+        item_counts,
+        pair_counts,
+    )
 
 
 # 데이터 가져오기
-total_days, num_items, num_pairs, rules_df, menu_options = load_and_process_data()
+(
+    total_days,
+    num_items,
+    num_pairs,
+    rules_df,
+    menu_options,
+    item_counts,
+    pair_counts,
+) = load_and_process_data()
 
 # 앱 헤더
 st.title("🍚 송탄고 급식 메뉴 연관 규칙 탐색기")
@@ -102,7 +118,7 @@ st.write(
 )
 st.divider()
 
-# 레이아웃 구성: 사이드바 컨트롤
+# 사이드바 컨트롤
 st.sidebar.header("조회 및 정렬 설정")
 
 # 메뉴 필터링 옵션
@@ -110,23 +126,32 @@ selected_menu = st.sidebar.selectbox(
     "특정 메뉴 선택 (전체 보기는 '전체')", ["전체"] + menu_options
 )
 
+# 최소 동시 일수 슬라이더 추가 (1~10, 기본값 1)
+min_cooccurrence = st.sidebar.slider(
+    "최소 동시 출현 일수", min_value=1, max_value=10, value=1
+)
+
 # 정렬 기준 선택
 sort_option = st.sidebar.radio(
     "정렬 기준 선택", options=["향상도", "신뢰도", "동시"], index=0
 )
 
-# 데이터 필터링 적용
-if selected_menu != "전체":
-    filtered_df = rules_df[
-        (rules_df["조건"] == selected_menu) | (rules_df["결과"] == selected_menu)
-    ].copy()
-else:
-    filtered_df = rules_df.copy()
+# 1. 최소 동시 일수 필터링
+filtered_df = rules_df[rules_df["동시"] >= min_cooccurrence].copy()
 
-# 정렬 적용
+# 2. 특정 메뉴 필터링
+if selected_menu != "전체":
+    filtered_df = filtered_df[
+        (filtered_df["조건"] == selected_menu) | (filtered_df["결과"] == selected_menu)
+    ].copy()
+
+# 3. 정렬 적용
 filtered_df = filtered_df.sort_values(by=sort_option, ascending=False).reset_index(
     drop=True
 )
+
+# 슬라이더 및 조건 필터링 결과 개수 출력
+st.info(f"🔍 현재 조건(최소 동시 일수 {min_cooccurrence}일 이상)을 만족하는 규칙 수: **{len(filtered_df)}개**")
 
 # Plotly 가로 막대그래프 (향상도 상위 10개)
 st.subheader("📊 향상도 상위 10개 규칙")
@@ -149,8 +174,49 @@ if not top10_df.empty:
     fig.update_layout(height=400, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("조건에 해당하는 규칙이 없습니다.")
+    st.warning("조건에 해당하는 규칙이 없습니다.")
 
 # 연관 규칙 데이터 프레임 출력
 st.subheader("📋 연관 규칙 목록")
 st.dataframe(filtered_df, use_container_width=True)
+
+st.divider()
+
+# --- 함께 나온 적 없는 짝 화면 ---
+st.subheader("❓ 함께 나온 적 없는 짝 찾기")
+st.write(
+    "특정 메뉴를 선택하면, 해당 메뉴와 **한 번도 함께 나오지 않았으면서 혼자서는 10일 이상 나온 메뉴** 목록을 보여줍니다."
+)
+
+target_menu = st.selectbox(
+    "조회할 대상 메뉴를 선택하세요",
+    menu_options,
+    key="unpaired_menu_select",
+)
+
+target_days = item_counts.get(target_menu, 0)
+st.write(f"👉 **선택한 메뉴 [{target_menu}] (이)가 급식에 나온 총 횟수:** {target_days}일")
+
+# 함께 나온 적 없는 메뉴 탐색
+unpaired_list = []
+for other_menu, count in item_counts.items():
+    if other_menu == target_menu:
+        continue
+
+    # 혼자 10일 이상 나온 메뉴만 대상
+    if count >= 10:
+        # 두 메뉴의 쌍 확인 (알파벳/가나다 순으로 pair_counts 키가 저장됨)
+        pair_key = tuple(sorted([target_menu, other_menu]))
+
+        # 동시 출현 횟수가 0인 경우 (pair_counts에 키가 없음)
+        if pair_key not in pair_counts:
+            unpaired_list.append({"메뉴": other_menu, "출현 일수": count})
+
+if unpaired_list:
+    unpaired_df = pd.DataFrame(unpaired_list)
+    unpaired_df = unpaired_df.sort_values(by="출현 일수", ascending=False).reset_index(
+        drop=True
+    )
+    st.dataframe(unpaired_df, use_container_width=True)
+else:
+    st.write("조건(10일 이상 출현 및 동시 출현 0회)을 만족하는 함께 나온 적 없는 짝 메뉴가 없습니다.")
